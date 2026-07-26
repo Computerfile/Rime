@@ -2,6 +2,7 @@ mod window;
 mod util;
 mod ttf;
 
+use std::env;
 use window::{init_app};
 use winit::dpi::LogicalSize;
 use util::unwrap_or_warn;
@@ -27,7 +28,8 @@ impl UserOptions {
         line_height: Option<f32>, 
         font: Option<FontUserOptions>,
         ) -> Self {
-       
+        
+        
         Self {
             title: unwrap_or_warn(title, "Rime".to_string(), "no title provided, using default"),
             size: unwrap_or_warn(size, LogicalSize::new(800, 600), "no size provided, using default"),
@@ -35,8 +37,18 @@ impl UserOptions {
             line_height: unwrap_or_warn(line_height, 20.0, "no line height provided, using default"),
             font: font.unwrap_or_else(|| {
                 eprintln!("No Font Provided, using default");
+
+                let fallback_font_path: String = match env::var("RIME_FONT_PATH") {
+                    Ok(val) => val,
+                    Err(env::VarError::NotPresent) => { 
+                        panic!("Value Not Found");
+                    },
+                    Err(env::VarError::NotUnicode(raw)) => {
+                        panic!("Can't Parse default font ENV value propperly")
+                    }
+                };
                 // /System/Library/Fonts/Supplemental/NotoSansLinearB-Regular.ttf
-                FontUserOptions { path: String::from("/Users/REDACTED/Downloads/wingding.ttf") }
+                FontUserOptions { path: fallback_font_path }
             })
         }
 
@@ -50,7 +62,8 @@ impl Default for UserOptions {
 }
 
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
     // INIT LOGGING
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
@@ -62,5 +75,5 @@ fn main() {
     let mut parser = TTFParser::new(user_options.font);
 
     // init_app(user_options); 
+    Ok(())
 }
-
