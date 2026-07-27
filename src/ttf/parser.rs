@@ -1,6 +1,7 @@
 use std::fs::File;
+use std::mem;
 
-use crate::ttf::font::{FontMetric, FontUserOptions};
+use crate::ttf::font::{FontMetric, FontUserOptions, Glyph, GlyphPoint};
 use crate::ttf::parser_errors::TableParsingError;
 
 pub fn read_file(file: &str) -> Vec<u8> {
@@ -74,6 +75,15 @@ impl FromBeBytes for i16 {
     }
 }
 
+
+impl FromBeBytes for u8 {
+    const SIZE: usize = 1;
+    fn from_be(bytes: &[u8]) -> Self {
+        u8::from_be_bytes(bytes.try_into().unwrap())
+    }
+}
+
+
 impl FromBeBytes for u16 {
     const SIZE: usize = 2;
     fn from_be(bytes: &[u8]) -> Self {
@@ -95,9 +105,13 @@ impl TTFParser {
             font_dir: FontDirectory::default(),
             font_metric: FontMetric::default(),
         }; 
+        
+        
+        ret.get_off_sub();
+        ret.get_tab_dir();
 
-        ret.read_ttf_tables();
         ret.parse_ttf_content();
+        ret.read_ttf_tables();
 
         ret
     }
@@ -127,12 +141,10 @@ impl TTFParser {
     }
 
     fn read_ttf_tables(&mut self) -> Result<(), TableParsingError> {
-        self.get_off_sub();
-        self.get_tab_dir();
         
         self.debug_print();
 
-        let glyph_id = self.map_glyph_id_codepoint(0x5C)?;
+        let glyph_id = self.map_glyph_id_codepoint(0x42)?;
         // 0x0042 -> A (Calibry Format 4)
         // 0x10000 -> A (NotoSansLinearB format 12)
 
@@ -148,6 +160,7 @@ impl TTFParser {
         
         // header
         let glyph_start = glyf_tab_base_addr + byte_offsets.0;
+        println!("{:?}", byte_offsets);
         let num_of_contours: i16 = self.read_at(glyph_start)?; 
         let xMin: i16 = self.read_at(glyph_start + 2)?; 
         let yMin: i16 = self.read_at(glyph_start + 4)?; 
@@ -156,7 +169,7 @@ impl TTFParser {
 
         if num_of_contours >= 0 {
             // single glyf
-            tracing::debug!("single {}", num_of_contours);
+            tracing::debug!("single glyf {:?}", num_of_contours);
             
             let mut endPtsOfContours: Vec<u16> = Vec::new();
         
@@ -165,16 +178,133 @@ impl TTFParser {
                 endPtsOfContours.push(end_point);
             }
 
+            let instruction_len_addr = glyph_start + 10 + (num_of_contours as u32 * 2);
+            let instruction_len: u16 = self.read_at(instruction_len_addr)?;
+            let mut instructions: Vec<u8> = Vec::new();
+
+            for i in 0..instruction_len {
+                let instruction_addr = instruction_len_addr + 2 + (i as u32);
+                let instruction: u8 = self.read_at(instruction_addr)?;
+                instructions.push(instruction);
+            }
+
+            let flag_lenght = *endPtsOfContours.last().unwrap_or(&0) as u32 + 1;
+            let flag_base_addr = instruction_len_addr + 2 + (instruction_len as u32);
+            let mut flags: Vec<u8> = Vec::new();
+            let mut flag_mark: u32 = flag_base_addr;
+
+            while flags.len() < flag_lenght as usize {
+                let flag: u8 = self.read_at(flag_mark)?;
+                let is_repeat_set = (flag >> 3) & 1 == 1;
+                
+                if is_repeat_set {
+                    let repeat_count: u8 = self.read_at(flag_mark + 1)?;
+
+                    for _ in 0..repeat_count+1 {
+                        flags.push(flag);
+                    }
+                    flag_mark += 2;
+                }else {
+                    flags.push(flag);
+                    flag_mark += 1;
+                }
+
+            }
+
+
+            let (mut x_coordinates, x_end_addr): (Vec<i16>, u32) = self.parse_glyf_coordinates(&flags, flag_mark, 1, 4)?;
+            let (mut y_coordinates, y_end_addr): (Vec<i16>, u32) = self.parse_glyf_coordinates(&flags, x_end_addr, 2, 5)?;
+
+            let mut final_x_delta: Vec<i16> = Vec::new();
+            let mut final_y_delta: Vec<i16> = Vec::new();
+
+            x_coordinates.into_iter().fold(0, |acc, val| {
+                let ret = val + acc;
+                final_x_delta.push(ret);  
+                ret
+            });
+
+            y_coordinates.into_iter().fold(0, |acc, val| {
+                let ret = val + acc;
+                final_y_delta.push(ret);  
+                ret
+            });
+
+            let glyph: Glyph = self.construct_glyph(&flags, &final_x_delta, &final_y_delta, &endPtsOfContours)?;
 
         } else if num_of_contours < 0 {
             // compound glyf 
             tracing::debug!("compound");
         } 
-
+        
 
         Ok(())
     }
-    
+  
+    fn construct_glyph(&mut self, flags: &Vec<u8>, x_deltas: &Vec<i16>, y_deltas: &Vec<i16>, end_pts_of_contours: &Vec<u16>) -> Result<Glyph, TableParsingError>{
+        let mut contours: Vec<Vec<GlyphPoint>> = Vec::new();
+        let mut current_contour: Vec<GlyphPoint> = Vec::new(); 
+        let mut contour_index: usize = 0;
+
+        for i in 0..flags.len() {
+            let mut point = GlyphPoint::default();
+
+            let flag: u8 = *flags.get(i).ok_or(TableParsingError::MalformedTable)?;
+            let on_curve = (flag >> 0) & 1 == 1;
+            let x = x_deltas[i];
+            let y = y_deltas[i];
+            
+            point = GlyphPoint { x, y, on_curve };
+            current_contour.push(point);
+
+            let current_contour_point: usize = end_pts_of_contours[contour_index] as usize;
+            if i == current_contour_point {
+                let c = mem::take(&mut current_contour);
+                contours.push(c);
+                contour_index+=1;
+            }
+
+        }
+
+        tracing::debug!("contours {:?}", contours);
+
+        let mut glyph: Glyph = Glyph { contours: contours };
+        Ok(glyph)
+    }
+
+    fn parse_glyf_coordinates(&mut self, flags: &Vec<u8>, start_address: u32, short_vector: u8, is_same: u8) -> Result<(Vec<i16>, u32), TableParsingError> {
+        let mut coordinate_vec: Vec<i16> = Vec::new(); 
+        let mut cursor: u32 = start_address;
+        for i in 0..flags.len() {
+            let flag: u8 = *flags.get(i).ok_or(TableParsingError::MalformedTable)?;
+            let is_x_short_vector = (flag >> short_vector) & 1 == 1;
+            let is_x_same = (flag >> is_same) & 1 == 1;
+            
+            let (byte_count, delta): (u32, i16) = match (is_x_short_vector, is_x_same) {
+                (true, true)   => { 
+                    let val: u8 = self.read_at(cursor)?;
+                    (1 as u32, val as i16)
+                },
+                (true, false)  => { 
+                    let val: u8 = self.read_at(cursor)?;
+                    (1 as u32, (-1 * val as i16))
+                },
+                (false, true)  => { 
+                    (0 as u32, 0 as i16)
+                },
+                (false, false) => { 
+                    let val: i16 = self.read_at(cursor)?;
+                    (2 as u32, val as i16)
+                },
+            };
+
+            coordinate_vec.push(delta);
+
+            cursor += byte_count;
+        }
+
+        Ok((coordinate_vec, cursor))
+    }
 
 
     fn get_offset_glyph_bytes(&mut self, glyph_id: u32, long: bool) -> Result<(u32, u32), TableParsingError> {
@@ -393,7 +523,6 @@ impl TTFParser {
         }
         
 
-        // No glyphID offset found, tables probably wrong idk
         Err(TableParsingError::MalformedTable)
         
     }

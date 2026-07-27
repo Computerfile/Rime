@@ -15,14 +15,16 @@ impl FontMetric {
 }
 
 
-
+#[derive(Default, Debug)]
 pub struct GlyphPoint {
-    x: i16, 
-    y: i16,
-    on_curve: bool,
+    pub x: i16, 
+    pub y: i16,
+    pub on_curve: bool,
 }
 
+
+#[derive(Default, Debug)]
 pub struct Glyph {
-    contours: Vec<Vec<GlyphPoint>>,
+    pub contours: Vec<Vec<GlyphPoint>>,
 }
 
