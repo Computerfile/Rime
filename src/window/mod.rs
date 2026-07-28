@@ -1,32 +1,53 @@
-mod rendering;
+pub mod renderer;
+mod device;
+pub mod rasterizer;
+mod text_engine;
 
+use std::str::Chars;
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-use crate::window::rendering::GPUState;
+use crate::ttf::parser::TTFParser;
+use crate::window::device::GPUState;
 use crate::UserOptions;
+use crate::window::renderer::Renderer;
+use crate::window::text_engine::{RasterizedGlyph, TextEngine};
 
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Point {
+    x: f32,
+    y: f32,
+    z: f32,
+}
 
 
 pub struct App {
     window: Option<Arc<Window>>,
     gpu: Option<GPUState>,
 
+    engine: TextEngine,
+
     // user customization
     user_options: UserOptions, 
+
 }
 
 impl App {
     pub fn new(user_options: UserOptions) -> Self {
+        let ttf_parser = TTFParser::new(&user_options.font);
+        let engine = TextEngine::new(ttf_parser, user_options.clone());
         Self {
             window: None,
             gpu: None,
             user_options,
+            engine,
         }
     }
 
@@ -39,9 +60,12 @@ impl ApplicationHandler for App {
             .with_inner_size(self.user_options.size);
         self.window = Some(Arc::new(event_loop.create_window(attrs).unwrap()));
         let window = self.window.as_ref().unwrap().clone();
-        self.gpu = Some(pollster::block_on(GPUState::new(window, 
+        self.gpu = Some(pollster::block_on(
+                GPUState::new(window, 
                     self.user_options.font_size, 
-                    self.user_options.line_height)).unwrap());
+                    self.user_options.line_height, 
+                    &self.user_options.renderer_mode
+                )).unwrap());
     }
 
     fn window_event(
@@ -72,6 +96,19 @@ impl ApplicationHandler for App {
                 self.window.as_ref().unwrap().request_redraw();
                 self.gpu.as_mut().unwrap().redraw_request();
             },
+            WindowEvent::KeyboardInput { device_id, event, is_synthetic } => {
+                if event.state != ElementState::Pressed { return }
+                if let winit::keyboard::Key::Character(string) = event.logical_key {
+                    if let Some(character) = string.chars().next() {
+                        let codepoint = character as u32;
+                        let rasterized_glyph: RasterizedGlyph = self.engine.get_rasterized(codepoint);
+                        self.gpu.as_mut().unwrap().update_pending_glyph(rasterized_glyph);
+                        self.window.as_ref().unwrap().request_redraw();
+                    }
+
+                }
+                
+            }
             /*WindowEvent::Resized => {},
             WindowEvent::ScaleFactorChanged { scale_factor, inner_size_writer } => {},*/
             _ => (),

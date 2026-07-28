@@ -1,7 +1,11 @@
+use std::alloc::GlobalAlloc;
+use std::collections::HashMap;
 use std::fs::File;
 use std::mem;
 
-use crate::ttf::font::{FontMetric, FontUserOptions, Glyph, GlyphPoint};
+use anyhow::Error;
+
+use crate::ttf::font::{FontMetric, FontUserOptions, Glyph, GlyphBounds, GlyphPoint};
 use crate::ttf::parser_errors::TableParsingError;
 
 pub fn read_file(file: &str) -> Vec<u8> {
@@ -59,6 +63,7 @@ pub struct TTFParser {
     font_dir: FontDirectory,
     bytes: Vec<u8>,
     font_metric: FontMetric,
+    pub glyph_cache: HashMap<u32, Glyph>, 
 } 
 
 trait FromBeBytes: Sized {
@@ -99,11 +104,12 @@ impl FromBeBytes for u32 {
 }
 
 impl TTFParser {
-    pub fn new(font_user_options: FontUserOptions) -> Self {
+    pub fn new(font_user_options: &FontUserOptions) -> Self {
         let mut ret = Self {
             bytes: read_file(&font_user_options.path),
             font_dir: FontDirectory::default(),
             font_metric: FontMetric::default(),
+            glyph_cache: HashMap::default(),
         }; 
         
         
@@ -111,9 +117,24 @@ impl TTFParser {
         ret.get_tab_dir();
 
         ret.parse_ttf_content();
-        ret.read_ttf_tables();
 
         ret
+    }
+
+
+    pub fn fetch_char_from_cache(&mut self, codepoint: u32) -> Result<Glyph, TableParsingError> {
+
+        if self.glyph_cache.contains_key(&codepoint) {
+            let glyph_data = self.glyph_cache.get(&codepoint).unwrap();
+            Ok(glyph_data.clone())
+        }else {
+            let glyph_data = self.read_ttf_tables(codepoint)?;
+
+            self.glyph_cache.insert(codepoint, glyph_data);
+
+            Ok(self.glyph_cache.get(&codepoint).unwrap().clone())
+        }
+        
     }
 
     fn read_at<T: FromBeBytes>(&self, absolute_offset: u32) -> Result<T, TableParsingError> {
@@ -140,32 +161,39 @@ impl TTFParser {
         Ok(T::from_be(&self.bytes[start..end]))
     }
 
-    fn read_ttf_tables(&mut self) -> Result<(), TableParsingError> {
+    fn read_ttf_tables(&mut self, codepoint: u32) -> Result<Glyph, TableParsingError> {
         
         self.debug_print();
 
-        let glyph_id = self.map_glyph_id_codepoint(0x42)?;
+        let glyph_id = self.map_glyph_id_codepoint(codepoint)?;
         // 0x0042 -> A (Calibry Format 4)
         // 0x10000 -> A (NotoSansLinearB format 12)
 
         let byte_offset = self.get_offset_glyph_bytes(glyph_id, self.font_metric.long_loca)?;    
         
-        let rasterizing_data = self.get_rasterising_data(byte_offset);
+        let rasterizing_data = self.get_rasterising_data(byte_offset)?;
 
-        Ok(()) 
+        Ok(rasterizing_data) 
     }
     
-    fn get_rasterising_data(&mut self, byte_offsets: (u32, u32)) -> Result<(), TableParsingError> {
+    fn get_rasterising_data(&mut self, byte_offsets: (u32, u32)) -> Result<Glyph, TableParsingError> {
         let glyf_tab_base_addr = self.get_offset_from_tag(b"glyf").ok_or(TableParsingError::MalformedTable)?; 
         
         // header
         let glyph_start = glyf_tab_base_addr + byte_offsets.0;
         println!("{:?}", byte_offsets);
         let num_of_contours: i16 = self.read_at(glyph_start)?; 
-        let xMin: i16 = self.read_at(glyph_start + 2)?; 
-        let yMin: i16 = self.read_at(glyph_start + 4)?; 
-        let xMax: i16 = self.read_at(glyph_start + 6)?; 
-        let yMax: i16 = self.read_at(glyph_start + 8)?;
+        let x_min: i16 = self.read_at(glyph_start + 2)?; 
+        let y_min: i16 = self.read_at(glyph_start + 4)?; 
+        let x_max: i16 = self.read_at(glyph_start + 6)?; 
+        let y_max: i16 = self.read_at(glyph_start + 8)?;
+
+        let glyph_bounds = GlyphBounds {
+            x_min,
+            x_max,
+            y_min,
+            y_max 
+        };
 
         if num_of_contours >= 0 {
             // single glyf
@@ -230,18 +258,26 @@ impl TTFParser {
                 ret
             });
 
-            let glyph: Glyph = self.construct_glyph(&flags, &final_x_delta, &final_y_delta, &endPtsOfContours)?;
+            let glyph: Glyph = self.construct_glyph(&flags, &final_x_delta, &final_y_delta, &endPtsOfContours, glyph_bounds)?;
 
-        } else if num_of_contours < 0 {
+            Ok(glyph)
+        } else {
             // compound glyf 
             tracing::debug!("compound");
-        } 
-        
+            let glyph: Glyph = Glyph::default(); 
+            Ok(glyph)
+        }         
 
-        Ok(())
     }
   
-    fn construct_glyph(&mut self, flags: &Vec<u8>, x_deltas: &Vec<i16>, y_deltas: &Vec<i16>, end_pts_of_contours: &Vec<u16>) -> Result<Glyph, TableParsingError>{
+    fn construct_glyph(&mut self, 
+        flags: &Vec<u8>, 
+        x_deltas: &Vec<i16>, 
+        y_deltas: &Vec<i16>, 
+        end_pts_of_contours: &Vec<u16>,
+        glyph_bounds: GlyphBounds
+        ) -> Result<Glyph, TableParsingError>{
+
         let mut contours: Vec<Vec<GlyphPoint>> = Vec::new();
         let mut current_contour: Vec<GlyphPoint> = Vec::new(); 
         let mut contour_index: usize = 0;
@@ -266,9 +302,10 @@ impl TTFParser {
 
         }
 
-        tracing::debug!("contours {:?}", contours);
-
-        let mut glyph: Glyph = Glyph { contours: contours };
+        let mut glyph: Glyph = Glyph { 
+            contours: contours,
+            bounds: glyph_bounds,
+        };
         Ok(glyph)
     }
 

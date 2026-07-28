@@ -5,22 +5,33 @@ use wgpu::hal::SurfaceError;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+use crate::window::renderer::{RenderMode, Renderer};
+use crate::window::text_engine::RasterizedGlyph;
+
 // tick of the GPU rendering loop
 pub struct GPUState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
+    device: Arc<wgpu::Device>,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
 
+    pending_glyph: Option<RasterizedGlyph>,
+
     // misc
-    size: PhysicalSize<u32>
+    size: PhysicalSize<u32>,
+    renderer: Renderer
 }    
 
 impl GPUState {
 
-  fn resize(&mut self, new_size: PhysicalSize<u32>) {
+    pub fn update_pending_glyph(&mut self, glyph: RasterizedGlyph) {
+        self.pending_glyph = Some(glyph); 
+    } 
+    
+
+    fn resize(&mut self, new_size: PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.size = new_size;
             self.config.width = new_size.width;
@@ -48,7 +59,7 @@ impl GPUState {
         );
 
         {
-            let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -64,6 +75,9 @@ impl GPUState {
                 timestamp_writes: None,
                 multiview_mask: None,
             });
+
+            self.renderer.draw(&mut render_pass, self.pending_glyph.as_ref());
+            
         }
 
         self.queue.submit(once(encoder.finish()));
@@ -72,7 +86,7 @@ impl GPUState {
     }
 
 
-    pub async fn new(window: Arc<Window>, font_size: f32, line_height: f32) -> anyhow::Result<Self> {
+    pub async fn new(window: Arc<Window>, font_size: f32, line_height: f32, render_mode: &RenderMode) -> anyhow::Result<Self> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             #[cfg(not(target_arch = "wasm32"))]
@@ -107,36 +121,41 @@ impl GPUState {
                 trace: wgpu::Trace::Off,
             })
             .await?;
+        
+        let device = Arc::new(device);
 
-      let surface_caps = surface.get_capabilities(&adapter);
+        let surface_caps = surface.get_capabilities(&adapter);
 
-      let surface_format = surface_caps.formats.iter()
+        let surface_format = surface_caps.formats.iter()
           .find(|f| f.is_srgb())
           .copied()
           .unwrap_or(surface_caps.formats[0]);
-      let config = wgpu::SurfaceConfiguration {
-          usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-          format: surface_format,
-          width: size.width,
-          height: size.height,
-          present_mode: surface_caps.present_modes[0],
-          alpha_mode: surface_caps.alpha_modes[0],
-          view_formats: vec![],
-          desired_maximum_frame_latency: 2,
-      };
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: size.width,
+            height: size.height,
+            present_mode: surface_caps.present_modes[0],
+            alpha_mode: surface_caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
 
-      surface.configure(&device, &config);
+        surface.configure(&device, &config);
 
+        let renderer = Renderer::new(*render_mode, device.clone(), surface_format, &config); 
 
-      Ok(Self {
+        Ok(Self {
           window,
           surface,
-          device,
+          device: device,
           queue,
           config,
+          pending_glyph: None,
           is_surface_configured: true,
           size,
-      })
+          renderer: renderer
+        })
     }
 
     pub fn redraw_request(&mut self) {

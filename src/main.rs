@@ -3,14 +3,16 @@ mod util;
 mod ttf;
 
 use std::env;
-use window::{init_app};
+use window::{init_app, rasterizer::Rasterizer};
 use winit::dpi::LogicalSize;
+use window::renderer::{Renderer, RenderMode};
 use util::unwrap_or_warn;
 use tracing::{info, Level};
 use tracing_subscriber::{fmt, EnvFilter};
 
-use crate::ttf::{font::FontUserOptions, parser::{TTFParser, read_file}};
+use crate::{ttf::{font::FontUserOptions, parser::{TTFParser, read_file}}, window::renderer};
 
+#[derive(Clone)]
 pub struct UserOptions {
     font_size: f32,
     line_height: f32,
@@ -18,6 +20,8 @@ pub struct UserOptions {
     size: LogicalSize<u32>,
 
     font: FontUserOptions,
+
+    renderer_mode: RenderMode,
 }
 
 impl UserOptions {
@@ -27,6 +31,7 @@ impl UserOptions {
         font_size: Option<f32>, 
         line_height: Option<f32>, 
         font: Option<FontUserOptions>,
+        renderer_mode: Option<RenderMode>,
         ) -> Self {
         
         
@@ -49,7 +54,8 @@ impl UserOptions {
                 };
                 // /System/Library/Fonts/Supplemental/NotoSansLinearB-Regular.ttf
                 FontUserOptions { path: fallback_font_path }
-            })
+            }),
+            renderer_mode: unwrap_or_warn(renderer_mode, RenderMode::Bitmap, "No RenderMode Provided Defaulting to Bitmap")
         }
 
     }
@@ -57,7 +63,7 @@ impl UserOptions {
 
 impl Default for UserOptions {
     fn default() -> Self {
-        Self::new(None, None, None, None, None)
+        Self::new(None, None, None, None, None, None)
     }
 }
 
@@ -72,8 +78,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // TTF Parser
         // read_file();
-    let mut parser = TTFParser::new(user_options.font);
+    // let mut parser = TTFParser::new(&user_options.font);
+    
+    // let letter_a = parser.fetch_char_from_cache(0x42)?;
+    
+    // tracing::debug!("{:?}", letter_a);
 
-    // init_app(user_options); 
+
+    init_app(user_options.clone()); 
     Ok(())
 }

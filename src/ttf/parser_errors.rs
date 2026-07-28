@@ -23,3 +23,4 @@ impl Display for TableParsingError {
 
 
 impl Error for TableParsingError{ }
+

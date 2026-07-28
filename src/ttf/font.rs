@@ -1,3 +1,4 @@
+#[derive(Default, Debug, Clone)]
 pub struct FontUserOptions {
    pub path: String,
 } 
@@ -15,16 +16,25 @@ impl FontMetric {
 }
 
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct GlyphPoint {
     pub x: i16, 
     pub y: i16,
     pub on_curve: bool,
 }
 
+#[derive(Default, Debug, Clone)]
+pub struct GlyphBounds {
+    pub x_min: i16,
+    pub y_min: i16,
+    pub x_max: i16,
+    pub y_max: i16,
+}
 
-#[derive(Default, Debug)]
+
+#[derive(Default, Debug, Clone)]
 pub struct Glyph {
     pub contours: Vec<Vec<GlyphPoint>>,
+    pub bounds: GlyphBounds,
 }
 
