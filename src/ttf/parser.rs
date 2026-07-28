@@ -62,7 +62,7 @@ struct Format12Subtable {
 pub struct TTFParser {
     font_dir: FontDirectory,
     bytes: Vec<u8>,
-    font_metric: FontMetric,
+    pub font_metric: FontMetric,
     pub glyph_cache: HashMap<u32, Glyph>, 
 } 
 

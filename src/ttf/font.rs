@@ -1,10 +1,11 @@
 #[derive(Default, Debug, Clone)]
 pub struct FontUserOptions {
    pub path: String,
+   pub font_metric: Option<FontMetric>,
 } 
 
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct FontMetric {
     pub units_per_em: u16,
     pub long_loca: bool
@@ -16,7 +17,7 @@ impl FontMetric {
 }
 
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct GlyphPoint {
     pub x: i16, 
     pub y: i16,
@@ -38,3 +39,22 @@ pub struct Glyph {
     pub bounds: GlyphBounds,
 }
 
+impl Glyph {
+
+    pub fn get_edges(&self) -> Vec<(GlyphPoint, GlyphPoint)> {
+        let mut ret: Vec<(GlyphPoint, GlyphPoint)> = Vec::new(); 
+
+        for contour in &self.contours {
+            for i in 0..contour.len() {
+                
+                let start = contour[i];
+                let end = contour[(i+1) % contour.len()];
+                ret.push((start,end));
+            }
+        }
+
+
+        ret
+    }
+    
+}

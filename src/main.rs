@@ -53,7 +53,7 @@ impl UserOptions {
                     }
                 };
                 // /System/Library/Fonts/Supplemental/NotoSansLinearB-Regular.ttf
-                FontUserOptions { path: fallback_font_path }
+                FontUserOptions { path: fallback_font_path, font_metric: None }
             }),
             renderer_mode: unwrap_or_warn(renderer_mode, RenderMode::Bitmap, "No RenderMode Provided Defaulting to Bitmap")
         }
@@ -85,6 +85,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // tracing::debug!("{:?}", letter_a);
 
 
-    init_app(user_options.clone()); 
+    init_app(&user_options); 
     Ok(())
 }

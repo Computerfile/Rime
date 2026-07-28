@@ -128,7 +128,7 @@ impl Renderer {
     pub fn draw(&mut self, render_pass: &mut wgpu::RenderPass, glyph: Option<&RasterizedGlyph>) {
         match self.mode {
             RenderMode::Bitmap => {
-                tracing::debug!("pasing glyph: {:?}", glyph);
+                // tracing::debug!("pasing glyph: {:?}", glyph);
                 // render_pass.set_pipeline(self.render_pipeline.as_ref().unwrap());
                 // render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 // render_pass.draw(0..6, 0..1);

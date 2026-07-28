@@ -40,8 +40,10 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(user_options: UserOptions) -> Self {
+    pub fn new(options: &UserOptions) -> Self {
+        let mut user_options = options.clone(); 
         let ttf_parser = TTFParser::new(&user_options.font);
+        user_options.font.font_metric = Some(ttf_parser.font_metric);
         let engine = TextEngine::new(ttf_parser, user_options.clone());
         Self {
             window: None,
@@ -116,7 +118,7 @@ impl ApplicationHandler for App {
     }
 }
 
-pub fn init_app(user_options: UserOptions) {
+pub fn init_app(user_options: &UserOptions) {
     let event_loop = EventLoop::new().unwrap();
 
     event_loop.set_control_flow(ControlFlow::Wait);
