@@ -25,6 +25,18 @@ pub struct Point {
     x: f32,
     y: f32,
     z: f32,
+
+    u: f32, 
+    v: f32,
+}
+
+impl Point {
+    fn new(x: f32, y: f32, z: f32, u: f32, v: f32) -> Self {
+        Self {
+            x, y, z, u, v
+        }
+    }
+
 }
 
 
@@ -42,15 +54,32 @@ pub struct App {
 impl App {
     pub fn new(options: &UserOptions) -> Self {
         let mut user_options = options.clone(); 
-        let ttf_parser = TTFParser::new(&user_options.font);
-        user_options.font.font_metric = Some(ttf_parser.font_metric);
-        let engine = TextEngine::new(ttf_parser, user_options.clone());
-        Self {
-            window: None,
-            gpu: None,
-            user_options,
-            engine,
+        
+        if let Ok(ttf_parser) = TTFParser::new(&user_options.font) {
+            user_options.font.font_metric = Some(ttf_parser.font_metric);
+            let engine = TextEngine::new(ttf_parser, user_options.clone());
+            Self {
+                window: None,
+                gpu: None,
+                user_options,
+                engine,
+            }
+        }else {
+            tracing::error!("Failed To Initialize TTF Parser With Error: Defaulting to Default Settings");
+            let ttf_default = TTFParser::new(&UserOptions::default().font).unwrap_or_else(|e| { panic!("Error: {}", e)} );
+
+            user_options.font.font_metric = Some(ttf_default.font_metric);
+            let engine = TextEngine::new(ttf_default, user_options.clone());
+
+            Self {
+                window: None,
+                gpu: None,
+                user_options,
+                engine,
+            }
+
         }
+
     }
 
 }
@@ -103,6 +132,7 @@ impl ApplicationHandler for App {
                 if let winit::keyboard::Key::Character(string) = event.logical_key {
                     if let Some(character) = string.chars().next() {
                         let codepoint = character as u32;
+                        // let codepoint: u32 = 0x1E80;
                         let rasterized_glyph: RasterizedGlyph = self.engine.get_rasterized(codepoint);
                         self.gpu.as_mut().unwrap().update_pending_glyph(rasterized_glyph);
                         self.window.as_ref().unwrap().request_redraw();

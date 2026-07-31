@@ -76,7 +76,7 @@ impl GPUState {
                 multiview_mask: None,
             });
 
-            self.renderer.draw(&mut render_pass, self.pending_glyph.as_ref());
+            self.renderer.draw(&mut render_pass, self.pending_glyph.as_ref(), &self.queue);
             
         }
 

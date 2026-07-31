@@ -27,7 +27,7 @@ impl Rasterizer {
         let width = ((raw_width as f32 / units_per_em as f32) * font_size).ceil() as usize;
         let height = ((raw_height as f32 / units_per_em as f32) * font_size).ceil() as usize;
 
-        let mut bitmap_data: Vec<i16> = vec![0; (width as usize) * (height as usize)];
+        let mut bitmap_data: Vec<u8> = vec![0; (width as usize) * (height as usize)];
         let edges: Vec<((f32, f32), (f32, f32))> = self.glyph.get_edges()
             .into_iter()
             .map(|(a, b)| {
@@ -40,13 +40,14 @@ impl Rasterizer {
 
         for i in 0..height {
             let mut crossings: Vec<i16> = vec![];
+        let i_offset: f32 = i as f32 + 0.5; 
 
-            for edge in &edges {
+        for edge in &edges {
 
-                if (edge.0.1 < i as f32 && edge.1.1 > i as f32) || (edge.0.1 > i as f32 && edge.1.1 < i as f32) {
-                    let proportional_distance = ((i as f32 -edge.0.1) as f32) / ((edge.1.1 - edge.0.1) as f32);
+            if (edge.0.1 < i_offset && edge.1.1 > i_offset ) || (edge.0.1 > i_offset && edge.1.1 < i_offset) {
+                let proportional_distance = ((i_offset -edge.0.1)) / ((edge.1.1 - edge.0.1) as f32);
                     let crossing_x = edge.0.0 as f32 + proportional_distance * (edge.1.0 - edge.0.0) as f32;
-                    crossings.push(crossing_x as i16);
+                    crossings.push(crossing_x.clamp(0.0, width as f32) as i16);
 
                 }
 
@@ -76,6 +77,8 @@ impl Rasterizer {
 
         RasterizedGlyph {
             data: bitmap_data,        
+            width: width as u32,
+            height: height as u32
         }
     }
 

@@ -1,12 +1,12 @@
-use std::alloc::GlobalAlloc;
 use std::collections::HashMap;
-use std::fs::File;
-use std::mem;
+use std::{mem};
 
-use anyhow::Error;
+use tracing::warn;
 
-use crate::ttf::font::{FontMetric, FontUserOptions, Glyph, GlyphBounds, GlyphPoint};
+use crate::ttf::font::{FontMetric, FontUserOptions, Glyph, GlyphBounds, GlyphPoint, LayoutFontInfo};
 use crate::ttf::parser_errors::TableParsingError;
+
+const FALLBACK_GLYPH_ID: u32 = 0; 
 
 pub fn read_file(file: &str) -> Vec<u8> {
    let bytes: Vec<u8> = match std::fs::read(file) {
@@ -64,13 +64,41 @@ pub struct TTFParser {
     bytes: Vec<u8>,
     pub font_metric: FontMetric,
     pub glyph_cache: HashMap<u32, Glyph>, 
+    pub font_limits: FontLimits,
+    
 } 
+
+#[derive(Default)]
+pub struct FontLimits {
+    num_glyphs: u16,
+    recursion_limits: RecursionLimits,
+    pub h_metrics: HorizontalMetrics,
+}
+
+#[derive(Default)]
+pub struct HorizontalMetrics {
+    advanced_widths: HashMap<u32, u16>, 
+    left_side_bearings: HashMap<u32, i16>, 
+} 
+
+#[derive(Default)]
+pub struct RecursionLimits {
+    max_component_element: u16,
+    max_component_depth: u16,
+}
 
 trait FromBeBytes: Sized {
     const SIZE: usize;
     fn from_be(bytes: &[u8]) -> Self;
 }
 
+
+impl FromBeBytes for i8 {
+    const SIZE: usize = 1;
+    fn from_be(bytes: &[u8]) -> Self {
+        i8::from_be_bytes(bytes.try_into().unwrap())
+    }
+}
 
 
 impl FromBeBytes for i16 {
@@ -104,21 +132,29 @@ impl FromBeBytes for u32 {
 }
 
 impl TTFParser {
-    pub fn new(font_user_options: &FontUserOptions) -> Self {
+    pub fn new(font_user_options: &FontUserOptions) -> Result<Self, TableParsingError> {
         let mut ret = Self {
             bytes: read_file(&font_user_options.path),
             font_dir: FontDirectory::default(),
             font_metric: FontMetric::default(),
             glyph_cache: HashMap::default(),
+            font_limits: FontLimits::default(),
         }; 
         
         
-        ret.get_off_sub();
-        ret.get_tab_dir();
+        ret.get_off_sub()?;
+        ret.get_tab_dir()?;
 
         ret.parse_ttf_content();
 
-        ret
+        let font_limits: FontLimits = match ret.get_memory_requirements() {
+            Ok(val) => val,
+            Err(err) => FontLimits::default(), 
+        };
+
+        ret.font_limits = font_limits;
+
+        Ok(ret)
     }
 
 
@@ -166,17 +202,36 @@ impl TTFParser {
         self.debug_print();
 
         let glyph_id = self.map_glyph_id_codepoint(codepoint)?;
-        // 0x0042 -> A (Calibry Format 4)
-        // 0x10000 -> A (NotoSansLinearB format 12)
+        
+        let g_data = self.map_id_to_glyph_data(glyph_id, codepoint, None)?;
+        
+        Ok(g_data)
+        
+    }
+    
+
+    fn map_id_to_glyph_data(&mut self, glyph_id: u32, codepoint: u32, depth_val: Option<u32>) -> Result<Glyph, TableParsingError> {
+        let depth = depth_val.unwrap_or_else(|| 0); 
+        
+        if depth > self.font_limits.recursion_limits.max_component_depth as u32 {
+            return Err(TableParsingError::CompositeDepthExceeded { count: depth, max: self.font_limits.recursion_limits.max_component_depth as u32 });
+        }
+
+        if !self.font_limits.h_metrics.advanced_widths.contains_key(&codepoint) {
+            self.parse_hmtx_table(glyph_id, codepoint)?;
+        }
 
         let byte_offset = self.get_offset_glyph_bytes(glyph_id, self.font_metric.long_loca)?;    
         
-        let rasterizing_data = self.get_rasterising_data(byte_offset)?;
+        let rasterizing_data = self.get_rasterising_data(byte_offset, codepoint, depth)?;
+        
+        // tracing::debug!("Hello rasterizing_data here {:?}", rasterizing_data);
 
         Ok(rasterizing_data) 
+
     }
-    
-    fn get_rasterising_data(&mut self, byte_offsets: (u32, u32)) -> Result<Glyph, TableParsingError> {
+
+    fn get_rasterising_data(&mut self, byte_offsets: (u32, u32), codepoint: u32, depth: u32) -> Result<Glyph, TableParsingError> {
         let glyf_tab_base_addr = self.get_offset_from_tag(b"glyf").ok_or(TableParsingError::MalformedTable)?; 
         
         // header
@@ -264,9 +319,9 @@ impl TTFParser {
         } else {
             // compound glyf 
             tracing::debug!("compound");
-            let glyph: Glyph = Glyph::default(); 
+            let glyph: Glyph = self.parse_compound_glyph(glyph_start + 10, codepoint, depth, glyph_bounds)?;
             Ok(glyph)
-        }         
+        } 
 
     }
   
@@ -306,6 +361,89 @@ impl TTFParser {
             contours: contours,
             bounds: glyph_bounds,
         };
+        Ok(glyph)
+    }
+
+
+    fn parse_compound_glyph(&mut self, glyph_start: u32, codepoint: u32, depth: u32, glyph_bounds: GlyphBounds) -> Result<Glyph, TableParsingError> {
+            
+        let mut glyph = Glyph { contours: Default::default(), bounds: glyph_bounds };
+        let mut cursor = glyph_start; 
+        let mut i = 0;
+        let mut MORE_COMPONENTS = true;
+
+        while MORE_COMPONENTS {
+            let flags: u16 = self.read_at(cursor)?; 
+            cursor += 2;
+            let mut glyph_index: u16 = self.read_at(cursor)?;
+            cursor += 2;
+            
+             
+            let ARG_1_AND_2_ARE_WORDS = self.get_bit(flags, 0);
+            let ARGS_ARE_XY_VALUES = self.get_bit(flags, 1);
+            let ROUND_XY_TO_GRID = self.get_bit(flags, 2);
+            let WE_HAVE_A_SCALE = self.get_bit(flags, 3);
+            MORE_COMPONENTS = self.get_bit(flags, 5); 
+            let WE_HAVE_AN_X_AND_Y_SCALE = self.get_bit(flags, 6);
+            let WE_HAVE_A_TWO_BY_TWO = self.get_bit(flags, 7);
+            let WE_HAVE_INSTRUCTIONS = self.get_bit(flags, 8);
+            let USE_MY_METRICS = self.get_bit(flags, 9);
+            let OVERLAP_COMPOUND = self.get_bit(flags, 10);
+           
+            let (argument_1, argument_2): (i32, i32) = if ARG_1_AND_2_ARE_WORDS {
+                let a1: i16 = self.read_at(cursor)?;
+                let a2: i16 = self.read_at(cursor + 2)?;
+                cursor = cursor + 4;
+                (a1 as i32, a2 as i32)
+            } else {
+                let a1: i8 = self.read_at(cursor)?;
+                let a2: i8 = self.read_at(cursor + 1)?;
+                cursor = cursor + 2;
+                (a1 as i32, a2 as i32)
+            };
+
+            if WE_HAVE_A_SCALE {
+                cursor += 2;
+            } 
+
+            if WE_HAVE_AN_X_AND_Y_SCALE {
+                cursor += 4;
+            } 
+
+            if WE_HAVE_A_TWO_BY_TWO {
+                cursor += 8;
+            }
+
+
+            if !ARGS_ARE_XY_VALUES {
+                tracing::warn!("point-matching mode encountered, not yet supported, component placement may be approximate/skipped");
+                glyph_index = 0;
+            }
+
+
+
+            let mut sub_glyph = self.map_id_to_glyph_data(glyph_index as u32, codepoint, Some(depth+1))?;
+
+            for countour in sub_glyph.contours.iter_mut() {
+                for point in countour.iter_mut() {
+                    let new_x = (point.x as i32 + argument_1).clamp(i16::MIN as i32, i16::MAX as i32);
+                    let new_y = (point.y as i32 + argument_2).clamp(i16::MIN as i32, i16::MAX as i32);
+
+                    point.x = new_x as i16;
+                    point.y = new_y as i16;
+                } 
+            }
+
+            glyph.contours.extend(sub_glyph.contours);
+
+            if self.font_limits.recursion_limits.max_component_element < i {
+                return Err(TableParsingError::CompositeDepthExceeded { count: i as u32, max: self.font_limits.recursion_limits.max_component_element as u32});
+            }
+
+            i = i+1;
+            tracing::debug!("component {}: glyph_index={}, args=({}, {}), more={}", i, glyph_index, argument_1, argument_2, MORE_COMPONENTS);
+        }
+
         Ok(glyph)
     }
 
@@ -374,8 +512,42 @@ impl TTFParser {
             },
         };
 
-        tracing::debug!("{:#?}", self.font_metric);
+        // tracing::debug!("{:#?}", self.font_metric);
         
+    }
+
+    fn parse_hmtx_table(&mut self, glyph_id: u32, codepoint: u32) -> Result<(), TableParsingError> {
+
+        let num_metrics: u16 = self.font_metric.layout_info.num_of_metrics;
+        
+        let mut aw_offset  = 0;
+
+        if glyph_id < (num_metrics as u32) {
+            aw_offset = glyph_id * 4; 
+
+            let lsb: i16 = self.read_table_field(b"hmtx",  aw_offset + 2)?;
+            self.font_limits.h_metrics.left_side_bearings.insert(codepoint, lsb);
+
+        }else {
+            if num_metrics == 0 {
+                return Err(TableParsingError::OffsetOutOfBounds { 
+                    offset: 0, 
+                    table_len: 0, 
+                });
+            }
+
+            aw_offset = (num_metrics as u32 - 1) * 4;
+            let lsb_offset: u32 = ((num_metrics as u32) * 4) + (glyph_id - num_metrics as u32);
+
+            let lsb: i16 = self.read_table_field(b"hmtx",  lsb_offset)?;
+            self.font_limits.h_metrics.left_side_bearings.insert(codepoint, lsb);
+        }
+    
+        let aw: u16 = self.read_table_field(b"hmtx", aw_offset)?;
+        
+        self.font_limits.h_metrics.advanced_widths.insert(codepoint, aw);
+
+        Ok(())
     }
 
 
@@ -383,7 +555,12 @@ impl TTFParser {
         self.font_dir.table_dir.iter().find(|t| &t.tag == tag).map(|t| t.offset)
     }
 
-    pub fn get_off_sub(&mut self) {
+    pub fn get_off_sub(&mut self) -> Result<(), TableParsingError> {
+        
+        if self.bytes.len() < 12 {
+            return Err(TableParsingError::OffsetOutOfBounds { offset: 20, table_len: self.bytes.len() })
+        }
+
         self.font_dir.off_sub.scaler_type = u32::from_be_bytes([
                                  self.bytes[0], 
                                  self.bytes[1], 
@@ -394,13 +571,20 @@ impl TTFParser {
                 self.bytes[4], 
                 self.bytes[5],
             ]);
+
+        Ok(())
     }
 
 
-    pub fn get_tab_dir(&mut self) {
+    pub fn get_tab_dir(&mut self) -> Result<(), TableParsingError> {
         let mut n_tab_dir: Vec<TableDirectory> = Vec::new();
         for i in 0..self.font_dir.off_sub.num_tables as usize {
             let entry_start = 12 + (i * 16);
+            
+            if self.bytes.len() < entry_start + 16 {
+                return Err(TableParsingError::OffsetOutOfBounds { offset: (entry_start + 16) as u32, table_len: self.bytes.len() });
+            }
+
             let slice = &self.bytes[entry_start..entry_start+16];
             let temp_t_dir = TableDirectory {
                 tag: slice[0..4].try_into().unwrap(),
@@ -411,6 +595,7 @@ impl TTFParser {
             n_tab_dir.push(temp_t_dir);
         } 
         self.font_dir.table_dir = n_tab_dir;
+        Ok(())
     }
 
     pub fn create_font_metrics(&mut self) -> Result<FontMetric, Box<dyn std::error::Error>>{
@@ -420,14 +605,32 @@ impl TTFParser {
         let index_to_loc_format: i16 = self.read_table_field(b"head", 50)?;
         let long_loca = index_to_loc_format != 0;
 
-        Ok(FontMetric { units_per_em, long_loca })
+        let numOfHMetrics: u16 = self.read_table_field(b"hhea", 34)?;
+        let ascent: i16 = self.read_table_field(b"hhea", 4)?;
+        let descent: i16 = self.read_table_field(b"hhea", 6)?;
+        let line_gap: i16 = self.read_table_field(b"hhea", 10)?;
+        
+        tracing::debug!("{:#?}", numOfHMetrics);
+
+
+        let fm = FontMetric {
+            units_per_em, 
+            long_loca, 
+            layout_info: LayoutFontInfo {
+                num_of_metrics: numOfHMetrics,
+                ascent,
+                descent,
+                line_gap
+            },
+        };
+
+        Ok(fm)
 
     }
 
 
     // cmap header
     fn map_glyph_id_codepoint(&mut self, codepoint: u32) -> Result<u32, TableParsingError>  {
-        
         let cmap_top_addr = self.get_offset_from_tag(b"cmap").ok_or(TableParsingError::MalformedTable)?;
         let num_tables: u16 = self.read_table_field(b"cmap", 2)?;
         
@@ -456,7 +659,8 @@ impl TTFParser {
         }else if let Some(offset) = format_4_record {
             (offset, 4)
         }else {
-            return Err(TableParsingError::MalformedTable);
+            tracing::error!("Unsupported cmap subtable format this font isn't compatible yet, try a different font");
+            return Ok(FALLBACK_GLYPH_ID);
         }; 
 
         let format: u16 = self.read_table_field(b"cmap", subtable_offset)?; 
@@ -469,13 +673,34 @@ impl TTFParser {
         let glyph_id = match format {
             4 => self.parse_format4(actual_offset, codepoint),
             12 => self.parse_format12(actual_offset, codepoint),
-            _ => Err(TableParsingError::MalformedTable),
+            _ => Ok(FALLBACK_GLYPH_ID),
         }?;
 
-        tracing::debug!("Breaking news Calibrì uses format: {format} ");
-        tracing::debug!("Breaking news {:X} in calibri font is {:?}", codepoint, glyph_id);
+
+        if glyph_id as u16 >= self.font_limits.num_glyphs {
+            
+            return Err(TableParsingError::GlyphIdOutOfRange { glyph_id, num_glyphs: self.font_limits.num_glyphs });
+        }
 
         Ok(glyph_id)
+    }
+    
+
+    //maxp header
+    pub fn get_memory_requirements(&mut self) -> Result<FontLimits, TableParsingError> {
+
+        let num_glyphs: u16 = self.read_table_field(b"maxp", 4)?;
+
+
+        let max_component_element: u16 = self.read_table_field(b"maxp", 28)?;
+        let max_component_depth: u16 = self.read_table_field(b"maxp", 30)?;
+
+        Ok(FontLimits {
+            num_glyphs, 
+            recursion_limits: RecursionLimits { max_component_element, max_component_depth },
+            h_metrics: Default::default(), 
+        })
+        
     }
 
 
@@ -501,7 +726,6 @@ impl TTFParser {
             if ((start_code as u32 <= codepoint) && codepoint <= (end_code as u32)) {
                 let idRangeOffset: u16 = self.read_at(absolute_offset + total_table_offsets + 2 + (seg_count*6) + (i*2))?;
                 let idDelta: i16 = self.read_at(absolute_offset + total_table_offsets + 2 + (seg_count*4) + (i*2))?;
-                tracing::debug!("idDelta: {}", idDelta);
 
                 if(idRangeOffset == 0) {
 
@@ -534,14 +758,12 @@ impl TTFParser {
 
         }
 
-        Err(TableParsingError::MalformedTable)
+        Ok(FALLBACK_GLYPH_ID)
     }
 
     fn parse_format12(&mut self, absolute_offset: u32, codepoint: u32) -> Result<u32, TableParsingError> {
 
         let format_tableH: u16 = self.read_at(absolute_offset)?; 
-        // so this needs to double check that the format is in fact 12 and not 4 but I dont know
-        // fonts to test this with so it shant be tested if there is a bug, blame the user
         let num_groups: u32 = self.read_at(absolute_offset+12)?; 
         let start_group_offset = 16;
         let size_group_table = 12;
@@ -560,8 +782,7 @@ impl TTFParser {
         }
         
 
-        Err(TableParsingError::MalformedTable)
-        
+        Ok(FALLBACK_GLYPH_ID) 
     }
 
     pub fn debug_print(&self) {
@@ -580,4 +801,9 @@ impl TTFParser {
 
 
     }
+
+    fn get_bit(&mut self, value: u16, bit: u8) -> bool {
+        (value >> bit) & 1 == 1
+    }
+
 }

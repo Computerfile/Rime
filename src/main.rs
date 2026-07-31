@@ -5,7 +5,7 @@ mod ttf;
 use std::env;
 use window::{init_app, rasterizer::Rasterizer};
 use winit::dpi::LogicalSize;
-use window::renderer::{Renderer, RenderMode};
+use window::renderer::{RenderMode};
 use util::unwrap_or_warn;
 use tracing::{info, Level};
 use tracing_subscriber::{fmt, EnvFilter};

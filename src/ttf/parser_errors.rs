@@ -5,7 +5,9 @@ pub enum TableParsingError {
     MalformedTable,
     UnsupportedFormat(u16),
     OffsetOutOfBounds { offset: u32, table_len: usize },
-}
+    GlyphIdOutOfRange { glyph_id: u32, num_glyphs: u16 },
+    CompositeDepthExceeded { count: u32, max: u32 },
+} 
 
 
 impl Display for TableParsingError {
@@ -16,6 +18,13 @@ impl Display for TableParsingError {
             TableParsingError::OffsetOutOfBounds { offset, table_len } => {
                 write!(f, "offset {offset} is out of bounds for table of length {table_len}")
             }
+            TableParsingError::CompositeDepthExceeded { count, max} => {
+                write!(f, "recursion depth {count} exceeded max of {max}")
+            }
+            TableParsingError::GlyphIdOutOfRange{ glyph_id, num_glyphs } => {
+                write!(f, "offset {glyph_id} is out of bounds for table of length {num_glyphs}")
+            }
+
         } 
     }
 

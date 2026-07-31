@@ -4,7 +4,9 @@ use crate::{UserOptions, ttf::{font::{FontUserOptions, Glyph}, parser::TTFParser
 
 #[derive(Default, Clone, Debug)]
 pub struct RasterizedGlyph {
-    pub data: Vec<i16>,
+    pub data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
 }
 
 

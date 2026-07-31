@@ -1,3 +1,6 @@
+use std::cmp;
+
+
 #[derive(Default, Debug, Clone)]
 pub struct FontUserOptions {
    pub path: String,
@@ -8,13 +11,17 @@ pub struct FontUserOptions {
 #[derive(Default, Debug, Clone, Copy)]
 pub struct FontMetric {
     pub units_per_em: u16,
-    pub long_loca: bool
+    pub long_loca: bool,
+    pub layout_info: LayoutFontInfo,
 }
 
-impl FontMetric {
-    
-
-}
+#[derive(Default, Debug, Clone, Copy)]
+pub struct LayoutFontInfo {
+    pub num_of_metrics: u16,
+    pub ascent: i16,
+    pub descent: i16,
+    pub line_gap: i16,
+} 
 
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -31,7 +38,6 @@ pub struct GlyphBounds {
     pub x_max: i16,
     pub y_max: i16,
 }
-
 
 #[derive(Default, Debug, Clone)]
 pub struct Glyph {
