@@ -2,6 +2,7 @@ pub mod renderer;
 mod device;
 pub mod rasterizer;
 mod text_engine;
+mod glyph_cache;
 
 use std::str::Chars;
 use std::sync::Arc;
@@ -10,12 +11,14 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::Key::{Character, Named};
+use winit::keyboard::NamedKey;
 use winit::window::{Window, WindowId};
 
+use crate::terminal::Terminal;
 use crate::ttf::parser::TTFParser;
 use crate::window::device::GPUState;
 use crate::UserOptions;
-use crate::window::renderer::Renderer;
 use crate::window::text_engine::{RasterizedGlyph, TextEngine};
 
 
@@ -36,7 +39,6 @@ impl Point {
             x, y, z, u, v
         }
     }
-
 }
 
 
@@ -45,7 +47,7 @@ pub struct App {
     gpu: Option<GPUState>,
 
     engine: TextEngine,
-
+    terminal: Terminal,
     // user customization
     user_options: UserOptions, 
 
@@ -54,7 +56,7 @@ pub struct App {
 impl App {
     pub fn new(options: &UserOptions) -> Self {
         let mut user_options = options.clone(); 
-        
+        let terminal: Terminal = Terminal::new(user_options.size.width, user_options.size.height);
         if let Ok(ttf_parser) = TTFParser::new(&user_options.font) {
             user_options.font.font_metric = Some(ttf_parser.font_metric);
             let engine = TextEngine::new(ttf_parser, user_options.clone());
@@ -63,6 +65,7 @@ impl App {
                 gpu: None,
                 user_options,
                 engine,
+                terminal
             }
         }else {
             tracing::error!("Failed To Initialize TTF Parser With Error: Defaulting to Default Settings");
@@ -76,11 +79,13 @@ impl App {
                 gpu: None,
                 user_options,
                 engine,
+                terminal
             }
 
         }
 
     }
+
 
 }
 
@@ -95,7 +100,8 @@ impl ApplicationHandler for App {
                 GPUState::new(window, 
                     self.user_options.font_size, 
                     self.user_options.line_height, 
-                    &self.user_options.renderer_mode
+                    &self.user_options.renderer_mode, 
+                    self.user_options.background_color,
                 )).unwrap());
     }
 
@@ -111,35 +117,29 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             },
             WindowEvent::RedrawRequested => {
-                // Redraw the application.
-                //
-                // It's preferable for applications that do not render continuously to render in
-                // this event rather than in AboutToWait, since rendering in here allows
-                // the program to gracefully handle redraws requested by the OS.
-
-                // Draw.
-
-                // Queue a RedrawRequested event.
-                //
-                // You only need to call this if you've determined that you need to redraw in
-                // applications which do not always need to. Applications that redraw continuously
-                // can render here instead.
                 self.window.as_ref().unwrap().request_redraw();
-                self.gpu.as_mut().unwrap().redraw_request();
+                self.gpu.as_mut().unwrap().redraw_request(&self.terminal, &mut self.engine);
             },
             WindowEvent::KeyboardInput { device_id, event, is_synthetic } => {
                 if event.state != ElementState::Pressed { return }
-                if let winit::keyboard::Key::Character(string) = event.logical_key {
-                    if let Some(character) = string.chars().next() {
-                        let codepoint = character as u32;
-                        // let codepoint: u32 = 0x1E80;
-                        let rasterized_glyph: RasterizedGlyph = self.engine.get_rasterized(codepoint);
-                        self.gpu.as_mut().unwrap().update_pending_glyph(rasterized_glyph);
-                        self.window.as_ref().unwrap().request_redraw();
-                    }
+                match event.logical_key {
+                    Character(string) => {
+                        if let Some(character) = string.chars().next() {
+                            let codepoint = character as u32;
+                            self.terminal.write_char(codepoint);
+                        }
+                    },
+                    Named(NamedKey::Space) => { 
+                        tracing::error!("Named(Space) branch");
+                        self.terminal.write_char(' ' as u32); 
+                    },
+                    _ => {},
+
 
                 }
                 
+                self.window.as_ref().unwrap().request_redraw();
+                self.gpu.as_mut().unwrap().redraw_request(&self.terminal, &mut self.engine);
             }
             /*WindowEvent::Resized => {},
             WindowEvent::ScaleFactorChanged { scale_factor, inner_size_writer } => {},*/

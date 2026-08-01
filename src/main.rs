@@ -1,6 +1,7 @@
 mod window;
 mod util;
 mod ttf;
+mod terminal;
 
 use std::env;
 use window::{init_app, rasterizer::Rasterizer};
@@ -18,10 +19,9 @@ pub struct UserOptions {
     line_height: f32,
     title: String,
     size: LogicalSize<u32>,
-
     font: FontUserOptions,
-
     renderer_mode: RenderMode,
+    background_color: wgpu::Color,
 }
 
 impl UserOptions {
@@ -32,6 +32,7 @@ impl UserOptions {
         line_height: Option<f32>, 
         font: Option<FontUserOptions>,
         renderer_mode: Option<RenderMode>,
+        background_color: Option<wgpu::Color>,
         ) -> Self {
         
         
@@ -55,7 +56,8 @@ impl UserOptions {
                 // /System/Library/Fonts/Supplemental/NotoSansLinearB-Regular.ttf
                 FontUserOptions { path: fallback_font_path, font_metric: None }
             }),
-            renderer_mode: unwrap_or_warn(renderer_mode, RenderMode::Bitmap, "No RenderMode Provided Defaulting to Bitmap")
+            renderer_mode: unwrap_or_warn(renderer_mode, RenderMode::Bitmap, "No RenderMode Provided Defaulting to Bitmap"),
+            background_color: unwrap_or_warn(background_color, wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }, "No Background COlor Set using default"),
         }
 
     }
@@ -63,7 +65,7 @@ impl UserOptions {
 
 impl Default for UserOptions {
     fn default() -> Self {
-        Self::new(None, None, None, None, None, None)
+        Self::new(None, None, None, None, None, None, None)
     }
 }
 

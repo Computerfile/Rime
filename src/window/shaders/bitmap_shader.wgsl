@@ -1,3 +1,9 @@
+struct InstanceInput {
+    @location(2) offset: vec2<f32>,
+    @location(3) uv_min: vec2<f32>,
+    @location(4) uv_max: vec2<f32>,
+}
+
 struct VertexInput {
 	@location(0) pos : vec3<f32>,
 	@location(1) uv: vec2<f32>,
@@ -9,10 +15,11 @@ struct VertexOutput {
 }
 
 @vertex
-fn vertex_entry_point(model: VertexInput) -> VertexOutput {
+fn vertex_entry_point(model: VertexInput, instance: InstanceInput) -> VertexOutput {
 	var out: VertexOutput;
-	out.pos = vec4f(model.pos.x, model.pos.y, model.pos.z, 1.0);
-	out.uv = model.uv;
+    out.pos = vec4f(model.pos.x + instance.offset.x, model.pos.y + instance.offset.y, model.pos.z, 1.0);
+	
+	out.uv = instance.uv_min + model.uv * (instance.uv_max - instance.uv_min);
 	
 	return out;
 }
@@ -30,5 +37,6 @@ fn fragment_main(in: VertexOutput) -> @location(0) vec4f {
 
 
     return vec4<f32>(alpha, alpha, alpha, alpha);
+	// return vec4<f32>(1.0, 1.0, 1.0, 1.0);
 }
 

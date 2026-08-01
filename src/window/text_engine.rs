@@ -9,7 +9,6 @@ pub struct RasterizedGlyph {
     pub height: u32,
 }
 
-
 pub struct TextEngine {
     parser: TTFParser,
     rasterized_glyph_cache: HashMap<u32, RasterizedGlyph>,

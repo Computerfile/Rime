@@ -58,7 +58,6 @@ struct Format12Subtable {
     groups: Vec<(u32, u32, u32)>,
 }
 
-// SCHENANIGANS COMMENCE
 pub struct TTFParser {
     font_dir: FontDirectory,
     bytes: Vec<u8>,
@@ -159,6 +158,7 @@ impl TTFParser {
 
 
     pub fn fetch_char_from_cache(&mut self, codepoint: u32) -> Result<Glyph, TableParsingError> {
+        println!("codepoint: {}", codepoint);
 
         if self.glyph_cache.contains_key(&codepoint) {
             let glyph_data = self.glyph_cache.get(&codepoint).unwrap();

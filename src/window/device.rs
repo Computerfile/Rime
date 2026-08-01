@@ -5,8 +5,10 @@ use wgpu::hal::SurfaceError;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+use crate::terminal::Terminal;
+use crate::terminal::cell::CellInstance;
 use crate::window::renderer::{RenderMode, Renderer};
-use crate::window::text_engine::RasterizedGlyph;
+use crate::window::text_engine::{RasterizedGlyph, TextEngine};
 
 // tick of the GPU rendering loop
 pub struct GPUState {
@@ -18,75 +20,26 @@ pub struct GPUState {
     is_surface_configured: bool,
 
     pending_glyph: Option<RasterizedGlyph>,
-
+    
+    // forgive me father for I have sinned
     // misc
     size: PhysicalSize<u32>,
-    renderer: Renderer
+    renderer: Renderer,
+    font_size: f32,
+    line_height: f32,
+    background_color: wgpu::Color,
 }    
 
 impl GPUState {
 
-    pub fn update_pending_glyph(&mut self, glyph: RasterizedGlyph) {
-        self.pending_glyph = Some(glyph); 
-    } 
-    
+    pub async fn new(
+        window: Arc<Window>, 
+        font_size: f32, 
+        line_height: f32, 
+        render_mode: &RenderMode,
+        background_color: wgpu::Color,
+        ) -> anyhow::Result<Self> {
 
-    fn resize(&mut self, new_size: PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
-            self.size = new_size;
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
-        }
-    }
-
-
-    fn render(&mut self) -> Result<(), SurfaceError> {
-        let output = match self.surface.get_current_texture() {
-            CurrentSurfaceTexture::Success(t) => t,
-            CurrentSurfaceTexture::Suboptimal(t) => t,
-            CurrentSurfaceTexture::Timeout => return Err(SurfaceError::Timeout),
-            CurrentSurfaceTexture::Occluded => return Err(SurfaceError::Occluded),
-            CurrentSurfaceTexture::Lost => return Err(SurfaceError::Lost),
-            CurrentSurfaceTexture::Validation => return Err(SurfaceError::Lost),
-            CurrentSurfaceTexture::Outdated => return Err(SurfaceError::Outdated),
-        };
-
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = self.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor{ label: Some("Render Encoder") }
-        );
-
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 1.0, g: 0.2, b: 0.3, a: 1.0 }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-                multiview_mask: None,
-            });
-
-            self.renderer.draw(&mut render_pass, self.pending_glyph.as_ref(), &self.queue);
-            
-        }
-
-        self.queue.submit(once(encoder.finish()));
-        output.present();
-        Ok(())
-    }
-
-
-    pub async fn new(window: Arc<Window>, font_size: f32, line_height: f32, render_mode: &RenderMode) -> anyhow::Result<Self> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             #[cfg(not(target_arch = "wasm32"))]
@@ -143,23 +96,95 @@ impl GPUState {
 
         surface.configure(&device, &config);
 
-        let renderer = Renderer::new(*render_mode, device.clone(), surface_format, &config); 
+        let renderer = Renderer::new(*render_mode, device.clone(), surface_format, &config, size); 
 
         Ok(Self {
-          window,
-          surface,
-          device: device,
-          queue,
-          config,
-          pending_glyph: None,
-          is_surface_configured: true,
-          size,
-          renderer: renderer
+            window,
+            surface,
+            device: device,
+            queue,
+            config,
+            pending_glyph: None,
+            is_surface_configured: true,
+            size,
+            renderer: renderer,
+
+            // user custom
+            line_height,
+            background_color,
+            font_size,
+
         })
     }
 
-    pub fn redraw_request(&mut self) {
-        match self.render() {
+    fn render(&mut self, terminal: &Terminal, engine: &mut TextEngine) -> Result<(), SurfaceError> {
+        let output = match self.surface.get_current_texture() {
+            CurrentSurfaceTexture::Success(t) => t,
+            CurrentSurfaceTexture::Suboptimal(t) => t,
+            CurrentSurfaceTexture::Timeout => return Err(SurfaceError::Timeout),
+            CurrentSurfaceTexture::Occluded => return Err(SurfaceError::Occluded),
+            CurrentSurfaceTexture::Lost => return Err(SurfaceError::Lost),
+            CurrentSurfaceTexture::Validation => return Err(SurfaceError::Lost),
+            CurrentSurfaceTexture::Outdated => return Err(SurfaceError::Outdated),
+        };
+
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor{ label: Some("Render Encoder") }
+        );
+        
+        let cell_instances: Vec<CellInstance> = self.renderer.resolve_glyphs(terminal, engine, &self.queue);
+        self.queue.write_buffer(&self.renderer.instance_buffer, 0, bytemuck::cast_slice(&cell_instances));
+        self.renderer.cell_instance_count = cell_instances.len() as u32; 
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+
+            self.renderer.draw(&mut render_pass, &self.queue);
+            
+        }
+
+        self.queue.submit(once(encoder.finish()));
+        output.present();
+        Ok(())
+    }
+
+    pub fn update_pending_glyph(&mut self, glyph: RasterizedGlyph) {
+        self.pending_glyph = Some(glyph); 
+    } 
+    
+
+    fn resize(&mut self, new_size: PhysicalSize<u32>) {
+        if new_size.width > 0 && new_size.height > 0 {
+            self.size = new_size;
+            self.config.width = new_size.width;
+            self.config.height = new_size.height;
+            self.surface.configure(&self.device, &self.config);
+        }
+    }
+
+
+
+
+
+    pub fn redraw_request(&mut self, terminal: &Terminal, engine: &mut TextEngine) {
+        match self.render(terminal, engine) {
             Ok(()) => {},
             Err(e) => {tracing::warn!("Render Error {:?}", e)},
         } 
