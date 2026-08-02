@@ -7,6 +7,7 @@ use winit::window::Window;
 
 use crate::terminal::Terminal;
 use crate::terminal::cell::CellInstance;
+use crate::ttf::font::FontUserOptions;
 use crate::window::renderer::{RenderMode, Renderer};
 use crate::window::text_engine::{RasterizedGlyph, TextEngine};
 
@@ -26,8 +27,9 @@ pub struct GPUState {
     size: PhysicalSize<u32>,
     renderer: Renderer,
     font_size: f32,
-    line_height: f32,
     background_color: wgpu::Color,
+    cell_width_px: u16,
+    cell_height_px: u16,
 }    
 
 impl GPUState {
@@ -35,10 +37,12 @@ impl GPUState {
     pub async fn new(
         window: Arc<Window>, 
         font_size: f32, 
-        line_height: f32, 
         render_mode: &RenderMode,
         background_color: wgpu::Color,
-        ) -> anyhow::Result<Self> {
+        font: FontUserOptions,
+        cell_width_px: u16,
+        cell_height_px: u16,
+    ) -> anyhow::Result<Self> {
 
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -96,7 +100,8 @@ impl GPUState {
 
         surface.configure(&device, &config);
 
-        let renderer = Renderer::new(*render_mode, device.clone(), surface_format, &config, size); 
+        
+        let renderer = Renderer::new(*render_mode, device.clone(), surface_format, &config, size, font, cell_width_px as f32, cell_height_px as f32); 
 
         Ok(Self {
             window,
@@ -110,10 +115,10 @@ impl GPUState {
             renderer: renderer,
 
             // user custom
-            line_height,
             background_color,
             font_size,
-
+            cell_width_px,
+            cell_height_px
         })
     }
 
@@ -170,15 +175,16 @@ impl GPUState {
     } 
     
 
-    fn resize(&mut self, new_size: PhysicalSize<u32>) {
+    pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
         }
-    }
+        self.renderer.resize(new_size.width, new_size.height);
 
+    }
 
 
 

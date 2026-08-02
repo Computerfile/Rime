@@ -15,8 +15,6 @@ use crate::{ttf::{font::FontUserOptions, parser::{TTFParser, read_file}}, window
 
 #[derive(Clone)]
 pub struct UserOptions {
-    font_size: f32,
-    line_height: f32,
     title: String,
     size: LogicalSize<u32>,
     font: FontUserOptions,
@@ -28,19 +26,17 @@ impl UserOptions {
     pub fn new(
         title: Option<String>, 
         size: Option<LogicalSize<u32>>,
-        font_size: Option<f32>, 
         line_height: Option<f32>, 
         font: Option<FontUserOptions>,
         renderer_mode: Option<RenderMode>,
         background_color: Option<wgpu::Color>,
+        font_size: Option<f32>,
         ) -> Self {
         
         
         Self {
             title: unwrap_or_warn(title, "Rime".to_string(), "no title provided, using default"),
             size: unwrap_or_warn(size, LogicalSize::new(800, 600), "no size provided, using default"),
-            font_size: unwrap_or_warn(font_size, 14.0, "no font size provided, using default"),
-            line_height: unwrap_or_warn(line_height, 20.0, "no line height provided, using default"),
             font: font.unwrap_or_else(|| {
                 eprintln!("No Font Provided, using default");
 
@@ -54,10 +50,15 @@ impl UserOptions {
                     }
                 };
                 // /System/Library/Fonts/Supplemental/NotoSansLinearB-Regular.ttf
-                FontUserOptions { path: fallback_font_path, font_metric: None }
+                FontUserOptions { path: fallback_font_path, 
+                    font_metric: None, 
+                    line_height: unwrap_or_warn(line_height, 1.20, "No Line Height set using default"),
+                    font_size: unwrap_or_warn(font_size, 14.0, "no font size provided, using default")
+                }
             }),
             renderer_mode: unwrap_or_warn(renderer_mode, RenderMode::Bitmap, "No RenderMode Provided Defaulting to Bitmap"),
             background_color: unwrap_or_warn(background_color, wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }, "No Background COlor Set using default"),
+
         }
 
     }

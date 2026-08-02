@@ -5,6 +5,8 @@ use std::cmp;
 pub struct FontUserOptions {
    pub path: String,
    pub font_metric: Option<FontMetric>,
+   pub line_height: f32,
+   pub font_size: f32,
 } 
 
 
@@ -31,7 +33,7 @@ pub struct GlyphPoint {
     pub on_curve: bool,
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct GlyphBounds {
     pub x_min: i16,
     pub y_min: i16,

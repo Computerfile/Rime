@@ -20,4 +20,10 @@ pub struct CellInstance {
     pub v_min: f32,
     pub u_max: f32,
     pub v_max: f32,
+
+    pub scale_x: f32,
+    // pub scale_y: f32,
+    pub y_max: f32, 
+    pub y_min: f32
+
 }

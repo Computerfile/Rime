@@ -3,7 +3,7 @@ use std::sync::Arc;
 use wgpu::{BindGroup, BindGroupLayout, BufferUsages, Origin3d, RenderPipeline, SurfaceConfiguration, TextureAspect, TextureDescriptor, TextureDimension, TextureUsages, TextureView, TextureViewDescriptor, VertexAttribute, VertexBufferLayout, VertexStepMode, util::{BufferInitDescriptor, DeviceExt}};
 use winit::dpi::PhysicalSize;
 
-use crate::{terminal::{CELL_HEIGHT_PX, CELL_WIDTH_PX, Terminal, cell::{Cell, CellInstance, CellState}}, ttf::font::Glyph, window::{Point, glyph_cache::{self, AtlasRect, GlyphCache}, renderer::bitmap::BitMapRenderer, text_engine::{RasterizedGlyph, TextEngine}}};
+use crate::{terminal::{Terminal, cell::{Cell, CellInstance, CellState}}, ttf::font::{FontUserOptions, Glyph}, window::{Point, glyph_cache::{self, ATLAS_PADDING, AtlasRect, GlyphCache}, renderer::bitmap::BitMapRenderer, text_engine::{RasterizedGlyph, TextEngine}}};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum RenderMode {
@@ -36,11 +36,25 @@ pub struct Renderer {
     size: PhysicalSize<u32>,
 
     glyph_bind_group: BindGroup,
+    font: FontUserOptions,
+    cell_width_px: f32, 
+    cell_height_px: f32,
+
+    cell_count: u32,
 }
 
 
 
-pub fn create_quad_for_char( x: f32, y: f32, atlas_cols: f32, atlas_rows: f32, char_grid_x: f32, char_grid_y: f32, width: u32, height: u32) -> [Point; 6] {
+pub fn create_quad_for_char(
+    x: f32, 
+    y: f32, 
+    width: u32, 
+    height: u32, 
+    cell_width_px: f32, 
+    cell_height_px: f32, 
+    descent: f32,
+    ascent: f32,
+    ) -> [Point; 6] {
 
  //     let u_min = char_grid_x / atlas_cols;
  //     let v_min = char_grid_y / atlas_rows;
@@ -48,8 +62,8 @@ pub fn create_quad_for_char( x: f32, y: f32, atlas_cols: f32, atlas_rows: f32, c
  //     let v_max = (char_grid_y + 1.0) / atlas_rows;
 
 
-    let cell_width_ndc = (CELL_WIDTH_PX * 2.0) / width as f32;
-    let cell_height_ndc = (CELL_HEIGHT_PX * 2.0) / height as f32; 
+    let cell_width_ndc = (cell_width_px * 2.0) / width as f32;
+    let cell_height_ndc = (cell_height_px * 2.0) / height as f32; 
 
     let u_min = 0.0;
     let v_min = 0.0;
@@ -57,25 +71,50 @@ pub fn create_quad_for_char( x: f32, y: f32, atlas_cols: f32, atlas_rows: f32, c
     let v_max = 1.0;
  
     
-    let p1 = Point::new(x, y, 0.0, u_min, v_min);
-    let p2 = Point::new(x, y - cell_height_ndc, 0.0, u_min, v_max);
-    let p3 = Point::new(x + cell_width_ndc, y, 0.0, u_max, v_min);
-    let p4 = Point::new(x + cell_width_ndc, y, 0.0, u_max, v_min);
-    let p5 = Point::new(x, y - cell_height_ndc, 0.0, u_min, v_max);
-    let p6 = Point::new(x + cell_width_ndc, y - cell_height_ndc, 0.0, u_max, v_max);
+    let p1 = Point::new(x, y + descent, 0.0, u_min, v_max); // 0, 0
+    let p2 = Point::new(x, y + ascent, 0.0, u_min, v_min); // 0, top
+    let p3 = Point::new(x + cell_width_ndc, y + descent, 0.0, u_max, v_max); // top, 0
+    let p4 = Point::new(x + cell_width_ndc, y + descent, 0.0, u_max, v_max); // top, 0 
+    let p5 = Point::new(x, y + ascent , 0.0, u_min, v_min); // 0, top  
+    let p6 = Point::new(x + cell_width_ndc, y + ascent, 0.0, u_max, v_min); // top top 
 
-    [p1, p2, p3, p4, p5, p6]
+    [p1, p3, p2, p4, p6, p5]
 }
 
 impl Renderer {
-    pub fn new(mode: RenderMode, device: Arc<wgpu::Device>, surface_format: wgpu::TextureFormat, config: &SurfaceConfiguration, size: PhysicalSize<u32>) -> Self {
-        // initalize vertex data 
-        let glyph_cache = GlyphCache::new(512, 512); 
+    pub fn new(
+        mode: RenderMode, 
+        device: Arc<wgpu::Device>, 
+        surface_format: wgpu::TextureFormat, 
+        config: &SurfaceConfiguration, 
+        size: PhysicalSize<u32>,
+        font: FontUserOptions,
+        cell_width_px: f32, 
+        cell_height_px: f32
+        ) -> Self {
+        
+
+        let ascent: i16 = font.font_metric.unwrap().layout_info.ascent;
+        let descent: i16 = font.font_metric.unwrap().layout_info.descent;
+        
+        let font_size = font.font_size;
+        let units_per_em = font.font_metric.unwrap().units_per_em as f32;
+        let descent_px = (descent as f32 / units_per_em) * font_size;   
+        let ascent_px = (ascent as f32 / units_per_em) * font_size;   
+        let descent_ndc = (descent_px * 2.0) / size.height as f32; 
+        let ascent_ndc = (ascent_px * 2.0) / size.height as f32; 
+
+        let col_count = (size.width as f32 / cell_width_px as f32) as u32;
+        let row_count = (size.height as f32 / cell_height_px as f32) as u32;
+        let cell_count = col_count * row_count;
+        
+
+        let glyph_cache = GlyphCache::new(1024, 1024); 
 
         tracing::error!("size: width: {}, height: {}, config: width {} height: {}", size.width, size.height, config.width, config.height);
         let empty_instance: Vec<CellInstance> = Vec::new();
 
-        let points: [Point; 6] = create_quad_for_char(-1.0, 1.0, 16.0, 16.0, 0.0, 0.0, size.width, size.height); 
+        let points: [Point; 6] = create_quad_for_char(0.0, 0.0, size.width, size.height, cell_width_px, cell_height_px, descent_ndc, ascent_ndc); 
         
         let byte_slice: &[u8] = bytemuck::cast_slice(&points);
         
@@ -85,13 +124,8 @@ impl Renderer {
             usage: BufferUsages::VERTEX,
         };
 
-        let instance_buffer = BufferInitDescriptor {
-            label: Some("Cell buffer"),
-            contents: bytemuck::cast_slice(&empty_instance),
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-        };
 
-        let max_cells = (size.width as f32 / CELL_WIDTH_PX) * (size.height as f32 / CELL_HEIGHT_PX);
+        let max_cells = (size.width as f32 / cell_width_px) * (size.height as f32 / cell_height_px);
         
         let buffer: wgpu::Buffer = device.create_buffer_init(&vertex_buffer);
 
@@ -122,8 +156,8 @@ impl Renderer {
 
         let glyph_cache_sampler: wgpu::Sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Sampler"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -185,6 +219,10 @@ impl Renderer {
             glyph_texture,
             size,
             glyph_bind_group,
+            font,
+            cell_width_px,
+            cell_height_px,
+            cell_count
         };
 
     
@@ -251,6 +289,16 @@ impl Renderer {
                 offset: 16, 
                 shader_location: 4
             },
+            VertexAttribute {
+                format: wgpu::VertexFormat::Float32,
+                offset: 24, 
+                shader_location: 5
+            },
+            VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 28, 
+                shader_location: 6,
+            },
         ]; 
 
 
@@ -291,7 +339,7 @@ impl Renderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: Some(wgpu::Face::Back),  
                 ..Default::default()
             },
             depth_stencil: None,
@@ -360,6 +408,8 @@ impl Renderer {
             let cached_glyph: Option<AtlasRect> = self.glyph_cache.get_or_allocate(codepoint, rasterized_glyph.width, rasterized_glyph.height);
             let rect = cached_glyph.unwrap();
 
+            if rect.width == 0 || rect.height == 0 { continue; }
+
             if is_new {
                 // Deep regret not making this a func in Glyph ngl
                 let size = wgpu::Extent3d {
@@ -397,19 +447,50 @@ impl Renderer {
             let row = (index / grid_w as usize) as f32;
             let col = (index % grid_w as usize) as f32;
 
-            let cell_width_ndc = (CELL_WIDTH_PX * 2.0) / self.size.width as f32;
-            let cell_height_ndc = (CELL_HEIGHT_PX * 2.0) / self.size.height as f32; 
 
-            let x_ndc = col * cell_width_ndc;
-            let y_ndc = -(row * cell_height_ndc);
+            let ascent = self.font.font_metric.unwrap().layout_info.ascent;
+            let descent = self.font.font_metric.unwrap().layout_info.descent;
 
+            let lsb = engine.get_lsb(codepoint).unwrap_or_else(|| 0) as f32;
+            let units_per_em = self.font.font_metric.unwrap().units_per_em as f32;
+            let lsb_px = (lsb / units_per_em) * self.font.font_size;
+            let lsb_ndc = (lsb_px * 2.0) / self.size.width as f32;
+            let advance_width_units = engine.get_advaned_widths('M' as u32).unwrap_or(0) as f32; 
+            let line_height_ratio = self.font.line_height; 
+            let effective_cell_height = (ascent - descent) as f32 * line_height_ratio;
+
+            let cell_width_ndc = (self.cell_width_px * 2.0) / self.size.width as f32;
+            let cell_height_ndc = (self.cell_height_px * 2.0) / self.size.height as f32; 
+
+            let x_ndc = -1.0 + col * cell_width_ndc + lsb_ndc;
+            let y_ndc = 1.0 - row * cell_height_ndc - cell_height_ndc;
+
+            // let effective_cell_height = (ascent - descent) as f32 / line_height_ratio;
+            // tracing::debug!("line_height_ratio={}, effective_cell_height={}", line_height_ratio, effective_cell_height);
+
+            // let glyph_width_ratio = (rasterized_glyph.bounds.x_max - rasterized_glyph.bounds.x_min) as f32 / (self.font.font_metric.unwrap().units_per_em as f32);
+
+            
+            let scale_x = ((rasterized_glyph.bounds.x_max - rasterized_glyph.bounds.x_min) as f32 / advance_width_units).clamp(0.0, 1.0);
+            // let scale_x = ((rasterized_glyph.bounds.x_max - rasterized_glyph.bounds.x_min) as f32 / self.font.font_metric.unwrap().units_per_em as f32).clamp(0.0, 1.0);
+           
+            // let scale_y = ((rasterized_glyph.bounds.y_max - rasterized_glyph.bounds.y_min) as f32 / self.font.font_metric.unwrap().units_per_em as f32).clamp(0.0, 1.0);
+            // let scale_y = 0.7;
+            
+            // let scale_y: f32 = ((rasterized_glyph.bounds.y_max - rasterized_glyph.bounds.y_min) as f32 / effective_cell_height as f32).clamp(0.0, 1.0);
+            
+            let y_max_px = (rasterized_glyph.bounds.y_max as f32 / units_per_em) * self.font.font_size;
+            let y_min_px = (rasterized_glyph.bounds.y_min as f32 / units_per_em) * self.font.font_size;
+
+            let top_ndc = (y_max_px * 2.0) / self.size.height as f32;
+            let bottom_ndc = (y_min_px * 2.0) / self.size.height as f32;
 
             let u_min = rect.x as f32 / self.glyph_texture.width() as f32;
             let u_max = (rect.x as f32 + rasterized_glyph.width as f32) / self.glyph_texture.width() as f32;
 
             let v_min = rect.y as f32 / self.glyph_texture.height() as f32;
             let v_max = (rect. y as f32 + rasterized_glyph.height as f32) / self.glyph_texture.height() as f32;
-            
+
             let instance = CellInstance {
                 x: x_ndc,
                 y: y_ndc,
@@ -418,6 +499,10 @@ impl Renderer {
                 u_max, 
                 v_min,
                 v_max,
+
+                scale_x,
+                y_max: top_ndc, 
+                y_min: bottom_ndc,
             };
 
             finalized_grid.push(instance);
@@ -426,5 +511,55 @@ impl Renderer {
         finalized_grid
     }
 
+
+    pub fn resize(&mut self, new_px_width: u32, new_px_height: u32) {
+        self.size = PhysicalSize {
+            width: new_px_width,
+            height: new_px_height
+        };
+
+        let new_cols = (new_px_width as f32 / self.cell_width_px as f32) as u32;
+        let new_rows = (new_px_height as f32 / self.cell_height_px as f32) as u32;
+        let new_cells = new_cols * new_rows;
+
+        if new_cells > self.cell_count {
+            self.cell_count = new_cells;
+
+            let instance_buffer: wgpu::Buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Cell buffer"),
+                size: (new_cells as usize * size_of::<CellInstance>()) as u64,
+                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+
+            self.instance_buffer = instance_buffer;
+
+        } 
+
+        let font_size = self.font.font_size;
+        let units_per_em = self.font.font_metric.unwrap().units_per_em as f32;
+        let ascent = self.font.font_metric.unwrap().layout_info.ascent as f32;
+        let descent = self.font.font_metric.unwrap().layout_info.descent as f32;
+
+        let descent_px = (descent as f32 / units_per_em) * font_size;   
+        let ascent_px = (ascent as f32 / units_per_em) * font_size;   
+        let descent_ndc = (descent_px * 2.0) / self.size.height as f32; 
+        let ascent_ndc = (ascent_px * 2.0) / self.size.height as f32; 
+
+        let points: [Point; 6] = create_quad_for_char(0.0, 0.0, new_px_width, new_px_height, self.cell_width_px, self.cell_height_px as f32, descent_ndc, ascent_ndc); 
+
+        let byte_slice: &[u8] = bytemuck::cast_slice(&points);
+
+        let vertex_buffer = BufferInitDescriptor {
+            label: Some("LABEL"),
+            contents: byte_slice,
+            usage: BufferUsages::VERTEX,
+        };
+
+        let buffer: wgpu::Buffer = self.device.create_buffer_init(&vertex_buffer);
+
+        self.vertex_buffer = buffer;
+
+    }
 
 }

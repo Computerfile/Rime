@@ -2,6 +2,8 @@ struct InstanceInput {
     @location(2) offset: vec2<f32>,
     @location(3) uv_min: vec2<f32>,
     @location(4) uv_max: vec2<f32>,
+    @location(5) scaleX: f32,
+	@location(6) y_bounds: vec2<f32>,
 }
 
 struct VertexInput {
@@ -17,8 +19,10 @@ struct VertexOutput {
 @vertex
 fn vertex_entry_point(model: VertexInput, instance: InstanceInput) -> VertexOutput {
 	var out: VertexOutput;
-    out.pos = vec4f(model.pos.x + instance.offset.x, model.pos.y + instance.offset.y, model.pos.z, 1.0);
-	
+	let is_top = model.pos.y > 0;
+	let y_local = select(instance.y_bounds.y, instance.y_bounds.x, is_top);
+	let x_local = model.pos.x * instance.scaleX;
+    out.pos = vec4f(instance.offset.x + x_local, instance.offset.y + y_local, model.pos.z, 1.0);
 	out.uv = instance.uv_min + model.uv * (instance.uv_max - instance.uv_min);
 	
 	return out;

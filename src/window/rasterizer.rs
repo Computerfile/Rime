@@ -1,5 +1,6 @@
 use crate::{UserOptions, ttf::font::{Glyph, GlyphPoint}, window::text_engine::RasterizedGlyph};
 
+const SUPERSAMPLE_FACTOR: f32 = 4.0;
 
 pub struct Rasterizer {
     glyph: Glyph,
@@ -22,7 +23,7 @@ impl Rasterizer {
         let raw_height: i16 = (self.glyph.bounds.y_max - self.glyph.bounds.y_min);
 
         let units_per_em = self.user_options.font.font_metric.unwrap().units_per_em;
-        let font_size = self.user_options.font_size;
+        let font_size = self.user_options.font.font_size * SUPERSAMPLE_FACTOR;
 
         let width = ((raw_width as f32 / units_per_em as f32) * font_size).ceil() as usize;
         let height = ((raw_height as f32 / units_per_em as f32) * font_size).ceil() as usize;
@@ -78,7 +79,8 @@ impl Rasterizer {
         RasterizedGlyph {
             data: bitmap_data,        
             width: width as u32,
-            height: height as u32
+            height: height as u32,
+            bounds: self.glyph.bounds,
         }
     }
 

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+pub const ATLAS_PADDING: u32 = 2;
+
 #[derive(Clone, Copy)]
 pub struct AtlasRect {
     pub x: u32,
@@ -49,24 +51,27 @@ impl GlyphCache {
             return Some(*r);
         }
 
-        if glyph_width > (self.atlas_width - self.cursor_x) {
+        let padded_width = glyph_width + ATLAS_PADDING * 2;
+        let padded_height = glyph_height + ATLAS_PADDING * 2;
+
+        if padded_width > (self.atlas_width - self.cursor_x) {
             self.cursor_x = 0;
             self.cursor_y += self.row_height;
             self.row_height = 0;
         }
 
-        if self.cursor_y + glyph_height > self.atlas_height {
+        if self.cursor_y + padded_height > self.atlas_height {
             return None;
         }
 
         let allocated = AtlasRect {
-            x: self.cursor_x,
-            y: self.cursor_y,
+            x: self.cursor_x + ATLAS_PADDING,
+            y: self.cursor_y + ATLAS_PADDING,
             width: glyph_width,
             height: glyph_height,
         };
-        self.cursor_x += glyph_width;
-        self.row_height = self.row_height.max(glyph_height);
+        self.cursor_x += glyph_width + ATLAS_PADDING;
+        self.row_height = self.row_height.max(glyph_height + ATLAS_PADDING * 2);
         self.add_to_cache(codepoint, allocated);
         Some(allocated)
     }

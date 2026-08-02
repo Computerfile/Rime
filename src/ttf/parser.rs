@@ -76,8 +76,8 @@ pub struct FontLimits {
 
 #[derive(Default)]
 pub struct HorizontalMetrics {
-    advanced_widths: HashMap<u32, u16>, 
-    left_side_bearings: HashMap<u32, i16>, 
+    pub advanced_widths: HashMap<u32, u16>, 
+    pub left_side_bearings: HashMap<u32, i16>, 
 } 
 
 #[derive(Default)]
@@ -221,14 +221,19 @@ impl TTFParser {
             self.parse_hmtx_table(glyph_id, codepoint)?;
         }
 
-        let byte_offset = self.get_offset_glyph_bytes(glyph_id, self.font_metric.long_loca)?;    
-        
-        let rasterizing_data = self.get_rasterising_data(byte_offset, codepoint, depth)?;
-        
-        // tracing::debug!("Hello rasterizing_data here {:?}", rasterizing_data);
+        let byte_offsets = self.get_offset_glyph_bytes(glyph_id, self.font_metric.long_loca)?;    
 
-        Ok(rasterizing_data) 
+        if byte_offsets.0 == byte_offsets.1 {
+            Ok(Glyph::default())
+        }else {
 
+            let rasterizing_data = self.get_rasterising_data(byte_offsets, codepoint, depth)?;
+            
+            // tracing::debug!("Hello rasterizing_data here {:?}", rasterizing_data);
+
+            Ok(rasterizing_data) 
+
+        }
     }
 
     fn get_rasterising_data(&mut self, byte_offsets: (u32, u32), codepoint: u32, depth: u32) -> Result<Glyph, TableParsingError> {
@@ -236,7 +241,7 @@ impl TTFParser {
         
         // header
         let glyph_start = glyf_tab_base_addr + byte_offsets.0;
-        println!("{:?}", byte_offsets);
+
         let num_of_contours: i16 = self.read_at(glyph_start)?; 
         let x_min: i16 = self.read_at(glyph_start + 2)?; 
         let y_min: i16 = self.read_at(glyph_start + 4)?; 
@@ -498,6 +503,8 @@ impl TTFParser {
             (b1 as u32 * 2, b2 as u32 * 2)
         };
 
+        tracing::debug!("Loca offset match ({}, {})", start_offset, end_offset);
+
         Ok((start_offset, end_offset))    
     }
 
@@ -643,7 +650,6 @@ impl TTFParser {
             let platform_id: u16 = self.read_table_field(b"cmap", record_offset)?;
             let encoding_id: u16 = self.read_table_field(b"cmap", record_offset + 2)?;
             let subtable_offset: u32 = self.read_table_field(b"cmap", record_offset + 4)?;
-
             match (platform_id, encoding_id) {
                 // format 12  encodings
                 (3, 10) | (0, 4) => { format_12_record = Some(subtable_offset); },

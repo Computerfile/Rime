@@ -8,7 +8,7 @@ use std::str::Chars;
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::Key::{Character, Named};
@@ -50,38 +50,39 @@ pub struct App {
     terminal: Terminal,
     // user customization
     user_options: UserOptions, 
+    cell_width_px: u16,
+    cell_height_px: u16,
 
 }
 
 impl App {
     pub fn new(options: &UserOptions) -> Self {
+
         let mut user_options = options.clone(); 
-        let terminal: Terminal = Terminal::new(user_options.size.width, user_options.size.height);
-        if let Ok(ttf_parser) = TTFParser::new(&user_options.font) {
-            user_options.font.font_metric = Some(ttf_parser.font_metric);
-            let engine = TextEngine::new(ttf_parser, user_options.clone());
-            Self {
-                window: None,
-                gpu: None,
-                user_options,
-                engine,
-                terminal
-            }
-        }else {
-            tracing::error!("Failed To Initialize TTF Parser With Error: Defaulting to Default Settings");
-            let ttf_default = TTFParser::new(&UserOptions::default().font).unwrap_or_else(|e| { panic!("Error: {}", e)} );
+        
+        let ttf_parser = TTFParser::new(&options.font).unwrap_or_else(|e| { panic!("Error: {}", e)} );
+        
+        user_options.font.font_metric = Some(ttf_parser.font_metric);
+        let mut engine = TextEngine::new(ttf_parser, user_options.clone());
 
-            user_options.font.font_metric = Some(ttf_default.font_metric);
-            let engine = TextEngine::new(ttf_default, user_options.clone());
+        let advance_width = engine.get_advaned_widths('M' as u32).unwrap_or(0) as f32;
+        let units_per_em = user_options.font.font_metric.unwrap().units_per_em as f32;
+        let ascent = user_options.font.font_metric.unwrap().layout_info.ascent as f32;
+        let descent = user_options.font.font_metric.unwrap().layout_info.descent as f32;
 
-            Self {
-                window: None,
-                gpu: None,
-                user_options,
-                engine,
-                terminal
-            }
+        let cell_width_px = ((advance_width / units_per_em) * user_options.font.font_size) as u16;
+        let cell_height_px = (((ascent - descent) / units_per_em) * user_options.font.font_size * user_options.font.line_height) as u16;
+        
+        let terminal: Terminal = Terminal::new(user_options.size.width, user_options.size.height, cell_width_px, cell_height_px);
 
+        Self {
+            window: None,
+            gpu: None,
+            user_options,
+            engine,
+            terminal,
+            cell_width_px,
+            cell_height_px
         }
 
     }
@@ -98,10 +99,12 @@ impl ApplicationHandler for App {
         let window = self.window.as_ref().unwrap().clone();
         self.gpu = Some(pollster::block_on(
                 GPUState::new(window, 
-                    self.user_options.font_size, 
-                    self.user_options.line_height, 
+                    self.user_options.font.font_size, 
                     &self.user_options.renderer_mode, 
                     self.user_options.background_color,
+                    self.user_options.font.clone(),
+                    self.cell_width_px,
+                    self.cell_height_px
                 )).unwrap());
     }
 
@@ -133,6 +136,10 @@ impl ApplicationHandler for App {
                         tracing::error!("Named(Space) branch");
                         self.terminal.write_char(' ' as u32); 
                     },
+                    Named(NamedKey::Backspace) => { 
+                        tracing::error!("Named(Space) branch");
+                        self.terminal.delete_char(); 
+                    },
                     _ => {},
 
 
@@ -140,9 +147,15 @@ impl ApplicationHandler for App {
                 
                 self.window.as_ref().unwrap().request_redraw();
                 self.gpu.as_mut().unwrap().redraw_request(&self.terminal, &mut self.engine);
-            }
-            /*WindowEvent::Resized => {},
-            WindowEvent::ScaleFactorChanged { scale_factor, inner_size_writer } => {},*/
+            },
+            WindowEvent::Resized(size) => {
+                self.terminal.resize(size.width, size.height);
+                self.gpu.as_mut().unwrap().resize(size);
+                self.window.as_ref().unwrap().request_redraw();
+                self.gpu.as_mut().unwrap().redraw_request(&self.terminal, &mut self.engine);
+                
+            },
+            WindowEvent::ScaleFactorChanged { scale_factor, inner_size_writer } => {},
             _ => (),
         }
     }
