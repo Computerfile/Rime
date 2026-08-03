@@ -1,7 +1,8 @@
 use std::cmp;
 
-use crate::terminal::cell::{Cell, CellInstance, CellState};
+use crate::terminal::{cell::{Cell, CellInstance, CellState}, cursor::Cursor};
 
+pub mod cursor;
 pub mod cell;
 
 pub const CELL_WIDTH_PX: f32 = 16.0;
@@ -13,8 +14,7 @@ pub struct Terminal {
     pub rows: u32,
     pub px_width: u32,
     pub px_height: u32,
-    pub cursor_x: u32,
-    pub cursor_y: u32,
+    pub cursor: Cursor,
 
 
     pub cell_height_px: u16,
@@ -28,12 +28,14 @@ impl Terminal {
         let height: f32 = px_height as f32 / cell_height_px as f32;
 
         let grid = vec![Cell { codepoint: ' ' as u32, state: CellState::NotWritten } ; width as usize * height as usize];
+        
+        let cursor = Cursor::new();
+
         Self { 
             grid, 
             px_width, 
             px_height, 
-            cursor_x: 0, 
-            cursor_y: 0, 
+            cursor,
             rows: height as u32, 
             cols: width as u32,
             cell_height_px, 
@@ -59,31 +61,31 @@ impl Terminal {
         }
 
 
-        self.grid = new_grid;
-        self.cols = new_cols;
-        self.rows = new_rows;
-        self.px_width = new_px_width;
-        self.px_height = new_px_height;
-        self.cursor_x = self.cursor_x.min(new_cols.saturating_sub(1));
-        self.cursor_y = self.cursor_y.min(new_rows.saturating_sub(1));
+    self.grid = new_grid;
+    self.cols = new_cols;
+    self.rows = new_rows;
+    self.px_width = new_px_width;
+    self.px_height = new_px_height;
+    self.cursor.y = self.cursor.x.min(new_cols.saturating_sub(1));
+    self.cursor.y = self.cursor.y.min(new_rows.saturating_sub(1));
 
     }
 
     pub fn write_char(&mut self, codepoint: u32) {
           
-        let index = self.cursor_y * self.cols + self.cursor_x;
+        let index = self.cursor.y * self.cols + self.cursor.x;
         self.grid[index as usize] = Cell { codepoint, state: CellState::Written };
 
-        if self.cursor_x + 1 > self.cols {
-            self.cursor_y += 1;
-            if self.cursor_y + 1 > self.rows {
+        if self.cursor.x + 1 > self.cols {
+            self.cursor.y += 1;
+            if self.cursor.y + 1 > self.rows {
                 // NO SPACE ??????
                 tracing::warn!("Clearing the terminal dybamically has not been implemented blame the user not the dev");
                 return;
             }
-            self.cursor_x = 0;
+            self.cursor.x = 0;
         }else {
-            self.cursor_x += 1;
+            self.cursor.x += 1;
         }
 
 
@@ -91,17 +93,17 @@ impl Terminal {
     }
     
     pub fn delete_char(&mut self) {
-        if self.cursor_x as i32 - 1 < 0 {
-            if self.cursor_y as i32 - 1 < 0 {
+        if self.cursor.x as i32 - 1 < 0 {
+            if self.cursor.y as i32 - 1 < 0 {
                 return;
             }
-            self.cursor_y -= 1;
-            self.cursor_x = self.cols - 1;
+            self.cursor.y -= 1;
+            self.cursor.x = self.cols - 1;
         }else {
-            self.cursor_x -= 1;
+            self.cursor.x -= 1;
         }
 
-        let index = self.cursor_y * self.cols + self.cursor_x;
+        let index = self.cursor.y * self.cols + self.cursor.x;
         self.grid[index as usize] = Cell { codepoint: ' ' as u32, state: CellState::NotWritten };
     }
 

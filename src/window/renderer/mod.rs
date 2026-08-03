@@ -202,8 +202,6 @@ impl Renderer {
         });
 
 
-
-
         let mut ret = Self {
             mode,
             device,

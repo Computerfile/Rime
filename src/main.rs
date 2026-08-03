@@ -53,7 +53,7 @@ impl UserOptions {
                 FontUserOptions { path: fallback_font_path, 
                     font_metric: None, 
                     line_height: unwrap_or_warn(line_height, 1.20, "No Line Height set using default"),
-                    font_size: unwrap_or_warn(font_size, 14.0, "no font size provided, using default")
+                    font_size: unwrap_or_warn(font_size, 20.0, "no font size provided, using default")
                 }
             }),
             renderer_mode: unwrap_or_warn(renderer_mode, RenderMode::Bitmap, "No RenderMode Provided Defaulting to Bitmap"),
